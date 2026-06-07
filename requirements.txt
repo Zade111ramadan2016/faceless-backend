@@ -1,0 +1,7 @@
+fastapi
+uvicorn
+requests
+g4f
+edge-tts
+moviepy
+pydantic
