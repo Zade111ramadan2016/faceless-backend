@@ -1,8 +1,8 @@
 import os
+import time
 import google.generativeai as genai
 
 genai.configure(api_key=os.environ["GEMINI_API_KEY"])
-model = genai.GenerativeModel("gemini-2.0-flash")
 
 PLATFORM_HINTS = {
     "tiktok":    "fast-paced, punchy sentences, trending Gen-Z energy, max 60 words",
@@ -37,8 +37,27 @@ Rules:
 - End with a strong call to action (like, follow, share, comment)
 - Write only the script text, nothing else"""
 
-    response = model.generate_content(prompt)
-    script = response.text.strip()
-    if not script:
-        raise ValueError("Gemini returned an empty script")
-    return script
+    models_to_try = [
+        "gemini-2.5-flash",
+        "gemini-2.0-flash",
+        "gemini-1.5-flash",
+        "gemini-pro",
+    ]
+
+    last_error = None
+    for model_name in models_to_try:
+        for attempt in range(3):
+            try:
+                model = genai.GenerativeModel(model_name)
+                response = model.generate_content(prompt)
+                script = response.text.strip()
+                if script:
+                    return script
+            except Exception as e:
+                last_error = str(e)
+                if "429" in str(e):
+                    time.sleep(10)
+                    continue
+                break
+
+    raise ValueError(f"All Gemini models failed. Last error: {last_error}")
