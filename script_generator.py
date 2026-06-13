@@ -2,7 +2,7 @@ import os
 import google.generativeai as genai
 
 genai.configure(api_key=os.environ["GEMINI_API_KEY"])
-model = genai.GenerativeModel("gemini-1.5-flash-latest")
+model = genai.GenerativeModel("gemini-2.0-flash")
 
 PLATFORM_HINTS = {
     "tiktok":    "fast-paced, punchy sentences, trending Gen-Z energy, max 60 words",
