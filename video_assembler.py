@@ -1,5 +1,6 @@
 import os
 import glob
+import subprocess
 from moviepy.editor import (
     VideoFileClip,
     AudioFileClip,
@@ -15,89 +16,79 @@ IMAGE_STYLES = {"anime", "cartoon", "comic"}
 def assemble_video(audio_path: str, clips_dir: str, output_path: str, style: str = "cinematic") -> None:
     audio = AudioFileClip(audio_path)
     audio_duration = audio.duration
+    audio.close()
 
     if style in IMAGE_STYLES:
-        final_bg = _assemble_from_images(clips_dir, audio_duration)
+        _assemble_images_ffmpeg(audio_path, clips_dir, output_path, audio_duration)
     else:
-        final_bg = _assemble_from_video(clips_dir, audio_duration)
-
-    final = final_bg.set_audio(audio).set_duration(audio_duration)
-
-    final.write_videofile(
-        output_path,
-        codec="libx264",
-        audio_codec="aac",
-        fps=30,
-        preset="ultrafast",
-        threads=2,
-        logger=None,
-    )
-
-    audio.close()
-    final.close()
+        _assemble_video_ffmpeg(audio_path, clips_dir, output_path, audio_duration)
 
 
-def _assemble_from_images(clips_dir: str, duration: float):
+def _assemble_video_ffmpeg(audio_path: str, clips_dir: str, output_path: str, duration: float) -> None:
+    clip_files = sorted(glob.glob(os.path.join(clips_dir, "clip_*.mp4")))
+    if not clip_files:
+        raise ValueError("No video clips found")
+
+    # Write concat list
+    concat_file = os.path.join(clips_dir, "concat.txt")
+    with open(concat_file, "w") as f:
+        total = 0.0
+        while total < duration:
+            for clip_path in clip_files:
+                if total >= duration:
+                    break
+                f.write(f"file '{clip_path}'\n")
+                # Get clip duration
+                result = subprocess.run(
+                    ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+                     "-of", "default=noprint_wrappers=1:nokey=1", clip_path],
+                    capture_output=True, text=True
+                )
+                try:
+                    clip_dur = float(result.stdout.strip())
+                except:
+                    clip_dur = 5.0
+                total += clip_dur
+
+    # Use ffmpeg directly — much lower memory than MoviePy
+    cmd = [
+        "ffmpeg", "-y",
+        "-f", "concat", "-safe", "0", "-i", concat_file,
+        "-i", audio_path,
+        "-t", str(duration),
+        "-vf", f"scale={TARGET_W}:{TARGET_H}:force_original_aspect_ratio=increase,crop={TARGET_W}:{TARGET_H}",
+        "-c:v", "libx264", "-preset", "ultrafast", "-crf", "28",
+        "-c:a", "aac", "-shortest",
+        output_path
+    ]
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.returncode != 0:
+        raise ValueError(f"FFmpeg error: {result.stderr[-500:]}")
+
+
+def _assemble_images_ffmpeg(audio_path: str, clips_dir: str, output_path: str, duration: float) -> None:
     image_files = sorted(glob.glob(os.path.join(clips_dir, "frame_*.jpg")))
     if not image_files:
         raise ValueError("No image frames found")
 
     per_image = duration / len(image_files)
-    clips = []
-    for path in image_files:
-        clip = (
-            ImageClip(path)
-            .set_duration(per_image)
-            .resize((TARGET_W, TARGET_H))
-        )
-        clips.append(clip)
 
-    return concatenate_videoclips(clips, method="compose")
+    concat_file = os.path.join(clips_dir, "concat.txt")
+    with open(concat_file, "w") as f:
+        for img_path in image_files:
+            f.write(f"file '{img_path}'\n")
+            f.write(f"duration {per_image}\n")
 
-
-def _assemble_from_video(clips_dir: str, duration: float):
-    clip_files = sorted(glob.glob(os.path.join(clips_dir, "clip_*.mp4")))
-    if not clip_files:
-        raise ValueError("No video clips found")
-
-    processed = []
-    for path in clip_files:
-        try:
-            clip = VideoFileClip(path, audio=False)
-            clip = _resize_to_portrait(clip)
-            processed.append(clip)
-        except Exception:
-            continue
-
-    if not processed:
-        raise ValueError("Failed to load any video clips")
-
-    return _fit_clips_to_duration(processed, duration)
-
-
-def _resize_to_portrait(clip):
-    clip_w, clip_h = clip.size
-    if (clip_w / clip_h) > (TARGET_W / TARGET_H):
-        clip = clip.resize(height=TARGET_H)
-        x_c = clip.w / 2
-        clip = clip.crop(x1=x_c - TARGET_W / 2, x2=x_c + TARGET_W / 2)
-    else:
-        clip = clip.resize(width=TARGET_W)
-        y_c = clip.h / 2
-        clip = clip.crop(y1=y_c - TARGET_H / 2, y2=y_c + TARGET_H / 2)
-    return clip.resize((TARGET_W, TARGET_H))
-
-
-def _fit_clips_to_duration(clips: list, duration: float):
-    result, total = [], 0.0
-    while total < duration:
-        for clip in clips:
-            remaining = duration - total
-            if remaining <= 0:
-                break
-            seg = clip.subclip(0, min(clip.duration, remaining))
-            result.append(seg)
-            total += seg.duration
-    if not result:
-        raise ValueError("Could not build video sequence")
-    return concatenate_videoclips(result, method="compose")
+    cmd = [
+        "ffmpeg", "-y",
+        "-f", "concat", "-safe", "0", "-i", concat_file,
+        "-i", audio_path,
+        "-t", str(duration),
+        "-vf", f"scale={TARGET_W}:{TARGET_H}:force_original_aspect_ratio=increase,crop={TARGET_W}:{TARGET_H}",
+        "-c:v", "libx264", "-preset", "ultrafast", "-crf", "28",
+        "-c:a", "aac", "-shortest",
+        output_path
+    ]
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.returncode != 0:
+        raise ValueError(f"FFmpeg error: {result.stderr[-500:]}")
